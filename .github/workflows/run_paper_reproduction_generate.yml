@@ -1,0 +1,182 @@
+name: "Run Paper Reproduction (generate)"
+run-name: "🤖 Paper Reproduction generate: ${{ inputs.run_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: 'Branch name (e.g., main)'
+        required: true
+        default: 'main'
+      run_id:
+        description: 'Run id. Deliverables are written under jobs/<run_id>/'
+        required: true
+      paper_url:
+        description: 'URL of the paper to reproduce (the agent fetches and reads it itself)'
+        required: true
+      repo_url:
+        description: "GitHub URL of the paper's implementation repository (empty: the agent searches with WebSearch)"
+        required: false
+        default: ''
+      instruction:
+        description: 'Natural language reproduction instruction'
+        required: true
+      target_kind:
+        description: 'Kind of the reproduction target'
+        required: true
+        type: choice
+        options:
+          - figure
+          - table
+      target_number:
+        description: 'Figure/table number (e.g. "Figure 3"). Leave empty if unknown'
+        required: false
+        default: ''
+      github_actions_agent:
+        description: 'AI agent tool to use (claude_code or open_code)'
+        required: true
+        type: choice
+        options:
+          - claude_code
+          - open_code
+        default: 'claude_code'
+      model_name:
+        description: 'Model to use (OpenCode: openrouter/openai/gpt-5-nano; Claude Code: sonnet/opus/haiku or full id)'
+        required: true
+        default: 'claude-sonnet-4-5-20250929'
+      prompt_path:
+        description: 'Path to the prompt template file'
+        required: false
+        default: '.github/prompts/run_paper_reproduction.md'
+      runner_label:
+        description: 'Runner label (e.g., ["ubuntu-latest"], ["self-hosted", "gpu-runner"])'
+        required: true
+        default: '["ubuntu-latest"]'
+
+permissions:
+  id-token: write
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN_DIR: jobs/${{ github.event.inputs.run_id }}
+
+jobs:
+  generate:
+    name: Generate Reproduction Code
+    runs-on: ${{ fromJSON(github.event.inputs.runner_label) }}
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch_name }}
+
+      - name: Prepare run directory
+        run: mkdir -p "$RUN_DIR"
+
+      - name: Clone target paper repository
+        if: github.event.inputs.repo_url != ''
+        env:
+          REPO_URL: ${{ github.event.inputs.repo_url }}
+        run: |
+          set -eu
+          git clone --depth 1 -- "$REPO_URL" "$RUN_DIR/repo"
+
+      - name: Build generation prompt
+        id: build-prompt
+        env:
+          PROMPT_PATH: ${{ github.event.inputs.prompt_path }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+          PAPER_URL: ${{ github.event.inputs.paper_url }}
+          INSTRUCTION: ${{ github.event.inputs.instruction }}
+          TARGET_KIND: ${{ github.event.inputs.target_kind }}
+          TARGET_NUMBER: ${{ github.event.inputs.target_number }}
+          REPO_URL: ${{ github.event.inputs.repo_url }}
+        run: |
+          set -e
+          if [ ! -f "$PROMPT_PATH" ]; then
+            echo "::error::Prompt file not found: $PROMPT_PATH"
+            exit 1
+          fi
+
+          PROMPT_FILE="/tmp/paper_reproduction_prompt.txt"
+          {
+            cat "$PROMPT_PATH"
+            echo ""
+            echo "RUN_ID: $RUN_ID"
+            echo "PAPER_URL: $PAPER_URL"
+            echo "INSTRUCTION:"
+            printf "%s\n" "$INSTRUCTION"
+            echo "TARGET_KIND: $TARGET_KIND"
+            echo "TARGET_NUMBER: $TARGET_NUMBER"
+            echo "REPO_URL: $REPO_URL"
+          } > "$PROMPT_FILE"
+
+          echo "prompt_file=$PROMPT_FILE" >> "$GITHUB_OUTPUT"
+          echo "Prompt saved to: $PROMPT_FILE ($(wc -c < "$PROMPT_FILE") bytes)"
+
+      - name: Run Claude Code for reproduction code
+        if: github.event.inputs.github_actions_agent == 'claude_code'
+        timeout-minutes: 180
+        uses: ./.github/actions/run-claude-code
+        with:
+          prompt_file: ${{ steps.build-prompt.outputs.prompt_file }}
+          model_name: ${{ github.event.inputs.model_name }}
+          max_turns: '80'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Run OpenCode for reproduction code
+        if: github.event.inputs.github_actions_agent == 'open_code'
+        timeout-minutes: 180
+        uses: ./.github/actions/run-open-code
+        with:
+          prompt_file: ${{ steps.build-prompt.outputs.prompt_file }}
+          model_name: ${{ github.event.inputs.model_name }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASEURL: ${{ secrets.LANGFUSE_BASE_URL }}
+
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_VERSION: "2024-10-01-preview"
+
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Commit and push generated code
+        env:
+          RUN_ID: ${{ github.event.inputs.run_id }}
+          BRANCH_NAME: ${{ github.event.inputs.branch_name }}
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git add -- "$RUN_DIR"
+
+          if ! git diff --staged --quiet; then
+            git commit -m "[CI] Paper reproduction generate for run_id=$RUN_ID using ${{ github.event.inputs.github_actions_agent }}"
+            git checkout -- .
+            for i in {1..5}; do
+              git pull --rebase -X theirs origin "$BRANCH_NAME"
+              git push origin "HEAD:$BRANCH_NAME" && break
+              echo "Push failed on attempt $i. Retrying in $((2**i)) seconds..."
+              sleep $((2**i))
+            done
+          else
+            echo "The agent generated no code for run_id=$RUN_ID."
+          fi

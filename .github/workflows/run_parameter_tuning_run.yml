@@ -1,0 +1,147 @@
+name: "Run Parameter Tuning (run)"
+run-name: "🤖 Parameter Tuning run: ${{ inputs.tune_run_id }} (base ${{ inputs.original_run_id }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: "Branch name (e.g., main)"
+        required: true
+        default: "main"
+      tune_run_id:
+        description: "Newly assigned tuning job id"
+        required: true
+        type: string
+      original_run_id:
+        description: "The already-run reproduction job id to tune (must have committed src/main.py + config + result.json)"
+        required: true
+        type: string
+      repo_url:
+        description: "GitHub URL of the paper's implementation repository (same as the original job)"
+        required: false
+        type: string
+      n_trials:
+        description: "Optuna trials (empty: use objective.n_trials from the original result.json, default 20)"
+        required: false
+        type: string
+      runner_label:
+        description: 'Runner label (e.g., ["ubuntu-latest"], ["self-hosted", "gpu-runner"])'
+        required: true
+        default: '["ubuntu-latest"]'
+
+permissions:
+  id-token: write
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tune:
+    runs-on: ${{ fromJSON(inputs.runner_label) }}
+    timeout-minutes: 360
+    env:
+      BRANCH_NAME: ${{ inputs.branch_name }}
+      TUNE_RUN_ID: ${{ inputs.tune_run_id }}
+      ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+      REPO_URL: ${{ inputs.repo_url }}
+      N_TRIALS: ${{ inputs.n_trials }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+    steps:
+      # The checkout restores the original reproduction (jobs/<original_run_id>/src + config +
+      # result.json), which run_paper_reproduction_run.yml committed to this branch.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+
+      - name: Prepare directories
+        run: mkdir -p "jobs/$TUNE_RUN_ID/outputs"
+
+      - name: Validate original job directory
+        run: |
+          set -eu
+          if [ ! -f "jobs/$ORIGINAL_RUN_ID/src/main.py" ] || [ ! -f "jobs/$ORIGINAL_RUN_ID/config/config.yaml" ] || [ ! -f "jobs/$ORIGINAL_RUN_ID/outputs/result.json" ]; then
+            echo "::error::jobs/$ORIGINAL_RUN_ID/{src/main.py,config/config.yaml,outputs/result.json} is missing on this branch. The reproduction run for original_run_id=$ORIGINAL_RUN_ID must have completed and pushed first."
+            exit 1
+          fi
+
+      # jobs/<original_run_id>/repo is gitignored, so it must be re-cloned here.
+      - name: Re-clone target paper repository
+        if: ${{ inputs.repo_url != '' }}
+        run: |
+          set -eu
+          git clone --depth 1 -- "$REPO_URL" "jobs/$ORIGINAL_RUN_ID/repo"
+
+      - name: Build environment and run tuning
+        id: run-tune
+        continue-on-error: true
+        run: |
+          set -eu
+          cd "jobs/$ORIGINAL_RUN_ID"
+          uv venv .venv
+          if [ -f repo/requirements.txt ]; then
+            uv pip install --no-cache --python .venv/bin/python -r repo/requirements.txt || true
+          fi
+          uv pip install --no-cache --python .venv/bin/python -e repo 2>/dev/null || true
+          if [ -f outputs/requirements.txt ]; then
+            uv pip install --no-cache --python .venv/bin/python -r outputs/requirements.txt || true
+          fi
+          uv pip install --no-cache --python .venv/bin/python optuna matplotlib pyyaml hydra-core
+          cd "$GITHUB_WORKSPACE"
+          N_TRIALS_ARG=""
+          if [ -n "${N_TRIALS:-}" ]; then N_TRIALS_ARG="--n-trials $N_TRIALS"; fi
+          "jobs/$ORIGINAL_RUN_ID/.venv/bin/python" .github/scripts/paper_reproduction/tune_driver.py \
+            --original-job-dir "jobs/$ORIGINAL_RUN_ID" \
+            --tune-output-dir "jobs/$TUNE_RUN_ID/outputs" \
+            --python .venv/bin/python \
+            $N_TRIALS_ARG 2>&1 | tee "jobs/$TUNE_RUN_ID/outputs/run.log"
+
+      - name: Determine tuning outcome
+        id: tuning-outcome
+        if: always()
+        run: |
+          set -eu
+          OUT="jobs/$TUNE_RUN_ID/outputs"
+          STATUS="passed"
+          if [ "${{ steps.run-tune.outcome }}" != "success" ] || [ ! -f "$OUT/result.json" ] || [ ! -f "$OUT/tuning_figure.png" ]; then
+            STATUS="failed"
+          fi
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push results
+        if: always()
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git add -- "jobs/$TUNE_RUN_ID"
+
+          if ! git diff --staged --quiet; then
+            git commit -m "[CI] Parameter tuning run for tune_run_id=$TUNE_RUN_ID"
+            git checkout -- .
+            for i in {1..5}; do
+              git pull --rebase -X theirs origin "$BRANCH_NAME"
+              git push origin "HEAD:$BRANCH_NAME" && break
+              echo "Push failed on attempt $i. Retrying in $((2**i)) seconds..."
+              sleep $((2**i))
+            done
+          else
+            echo "No results to commit for tune_run_id=$TUNE_RUN_ID"
+          fi
+
+      - name: Fail job if tuning did not produce results
+        if: ${{ steps.tuning-outcome.outputs.status == 'failed' }}
+        run: |
+          echo "::error::tune_driver.py did not produce result.json + tuning_figure.png. See outputs/run.log."
+          exit 1
