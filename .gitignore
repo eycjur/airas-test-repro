@@ -196,3 +196,6 @@ models/
 *.log
 *.out
 *.blg
+
+# .reproduction/ are committed by the workflows; the cloned paper repo is not.
+.reproduction/repo/

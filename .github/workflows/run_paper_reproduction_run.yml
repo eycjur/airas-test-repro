@@ -1,9 +1,5 @@
 name: "Run Paper Reproduction (run)"
-run-name: "🤖 Paper Reproduction run: ${{ inputs.run_id }}"
-
-# Agentless deterministic execution. The generate workflow committed src/main.py + config + paper.txt
-# under jobs/<run_id>/; a plain checkout restores them. This job runs src/main.py via Hydra, in Docker
-# if the generated code includes a Dockerfile, otherwise natively with uv.
+run-name: "🤖 Paper Reproduction run"
 
 on:
   workflow_dispatch:
@@ -12,9 +8,6 @@ on:
         description: 'Branch name (e.g., main)'
         required: true
         default: 'main'
-      run_id:
-        description: 'Run id created by run_paper_reproduction_generate.yml'
-        required: true
       repo_url:
         description: "GitHub URL of the paper's implementation repository (same as the generate job)"
         required: false
@@ -27,26 +20,24 @@ on:
 permissions:
   id-token: write
   contents: write
+  actions: write
 
 defaults:
   run:
     shell: bash
 
 env:
-  RESULTS_DIR: outputs
+  RESULTS_DIR: .reproduction/results
 
 jobs:
   run:
     name: Run Reproduction
     runs-on: ${{ fromJSON(github.event.inputs.runner_label) }}
-    timeout-minutes: 360
+    timeout-minutes: 600
 
     env:
       BRANCH_NAME: ${{ github.event.inputs.branch_name }}
-      RUN_ID: ${{ github.event.inputs.run_id }}
-      RUN_DIR: jobs/${{ github.event.inputs.run_id }}
       REPO_URL: ${{ github.event.inputs.repo_url }}
-      # Experiments that call an LLM/API at runtime may use these.
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -59,123 +50,175 @@ jobs:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
     steps:
-      # The checkout also restores the generated src/main.py + config + paper.txt (jobs/<run_id>/),
-      # which run_paper_reproduction_generate.yml committed to this branch.
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch_name }}
 
-      - name: Validate generated run directory
+      - name: Validate generated code
         run: |
           set -eu
-          if [ ! -f "$RUN_DIR/src/main.py" ] || [ ! -f "$RUN_DIR/config/config.yaml" ]; then
-            echo "::error::$RUN_DIR/src/main.py or config/config.yaml is missing on this branch. run_paper_reproduction_generate.yml for run_id=$RUN_ID must have completed and pushed first."
+          if [ ! -f "src/main.py" ] || [ ! -f "config/config.yaml" ]; then
+            echo "::error::src/main.py or config/config.yaml is missing on this branch. run_paper_reproduction_generate.yml must have completed and pushed first."
             exit 1
           fi
 
-      # jobs/<run_id>/repo is gitignored, so it must be re-cloned here.
+      # .reproduction/repo is gitignored, so it must be re-cloned here.
       - name: Re-clone target paper repository
         if: github.event.inputs.repo_url != ''
         run: |
           set -eu
-          git clone --depth 1 -- "$REPO_URL" "$RUN_DIR/repo"
+          git clone --depth 1 -- "$REPO_URL" .reproduction/repo
 
       - name: Check Docker and Dockerfile availability
         id: check-docker
         run: |
           has_docker=false
           has_dockerfile=false
-          if docker info > /dev/null 2>&1; then has_docker=true; fi
-          if [ -f "$RUN_DIR/Dockerfile" ]; then has_dockerfile=true; fi
+
+          if docker info > /dev/null 2>&1; then
+            has_docker=true
+            echo "Docker is available"
+          else
+            echo "Docker is not available, will use native execution"
+          fi
+
+          if [ -f "Dockerfile" ]; then
+            has_dockerfile=true
+            echo "Dockerfile found"
+          else
+            echo "Dockerfile not found"
+          fi
+
           echo "has_docker=$has_docker" >> "$GITHUB_OUTPUT"
           echo "has_dockerfile=$has_dockerfile" >> "$GITHUB_OUTPUT"
 
       - name: Prepare results dir
-        run: mkdir -p "$RUN_DIR/$RESULTS_DIR"
+        run: mkdir -p "$RESULTS_DIR"
 
       - name: Build Docker image
         if: steps.check-docker.outputs.has_docker == 'true' && steps.check-docker.outputs.has_dockerfile == 'true'
         id: build-docker
         continue-on-error: true
-        run: |
-          (
-            set -e
-            echo "=== [DOCKER BUILD] Start at $(date -u) ==="
-            docker build -t airas-repro:latest "$RUN_DIR"
-            echo "=== [DOCKER BUILD] Success at $(date -u) ==="
-          ) 2>&1 | tee -a "$RUN_DIR/$RESULTS_DIR/run.log"
+        uses: Wandalen/wretry.action@v3
+        with:
+          attempt_limit: 3
+          attempt_delay: 30000
+          command: |
+            (
+              set -e
+              echo "=== [DOCKER BUILD] Start at $(date -u) ==="
+              docker build -t airas-repro:latest .
+              echo "=== [DOCKER BUILD] Success at $(date -u) ==="
+            ) 2>&1 | tee -a "$RESULTS_DIR/docker_build.log"
+
+            exit_status=${PIPESTATUS[0]}
+            if [ $exit_status -ne 0 ]; then
+              echo "::warning::Docker build failed (exit $exit_status), will fall back to native execution"
+              cat "$RESULTS_DIR/docker_build.log" >> "$RESULTS_DIR/run.log"
+              exit $exit_status
+            fi
 
       - name: Install uv (fallback if no Docker)
         if: steps.check-docker.outputs.has_docker == 'false' || steps.check-docker.outputs.has_dockerfile == 'false' || steps.build-docker.outcome != 'success'
-        uses: astral-sh/setup-uv@v6
+        uses: Wandalen/wretry.action@v3
         with:
-          python-version: "3.11"
+          action: astral-sh/setup-uv@v6
+          with: |
+            python-version: "3.11"
+          attempt_limit: 3
+          attempt_delay: 30000
 
       - name: Run reproduction (Docker)
         if: steps.check-docker.outputs.has_docker == 'true' && steps.check-docker.outputs.has_dockerfile == 'true' && steps.build-docker.outcome == 'success'
         id: run-docker
         continue-on-error: true
-        run: |
-          GPU_FLAGS=""
-          if nvidia-smi > /dev/null 2>&1; then GPU_FLAGS="--gpus all"; fi
-          docker run --rm $GPU_FLAGS \
-            -v "$(pwd)/$RUN_DIR/$RESULTS_DIR:/workspace/$RESULTS_DIR" \
-            -e ANTHROPIC_API_KEY -e AWS_BEARER_TOKEN_BEDROCK -e GEMINI_API_KEY -e HF_TOKEN \
-            -e OPENAI_API_KEY -e OPENROUTER_API_KEY -e WANDB_API_KEY \
-            airas-repro:latest \
-            bash -c '
-              set -e
-              echo "=== [REPRODUCE] Start at $(date -u) ==="
-              python -u -m src.main run=reproduction results_dir="'"$RESULTS_DIR"'"
-              echo "=== [REPRODUCE] PASSED at $(date -u) ==="
-            ' 2>&1 | tee -a "$RUN_DIR/$RESULTS_DIR/run.log"
+        uses: Wandalen/wretry.action@v3
+        with:
+          attempt_limit: 2
+          attempt_delay: 60000
+          command: |
+            trap 'sleep 1' EXIT
+
+            GPU_FLAGS=""
+            if nvidia-smi > /dev/null 2>&1; then
+              echo "GPU detected, enabling GPU support"
+              GPU_FLAGS="--gpus all"
+            else
+              echo "No GPU detected, running without GPU support"
+            fi
+
+            docker run --rm $GPU_FLAGS \
+              -v "$(pwd)/$RESULTS_DIR:/workspace/$RESULTS_DIR" \
+              -e ANTHROPIC_API_KEY \
+              -e AWS_BEARER_TOKEN_BEDROCK \
+              -e GEMINI_API_KEY \
+              -e HF_TOKEN \
+              -e LANGFUSE_BASE_URL \
+              -e LANGFUSE_PUBLIC_KEY \
+              -e LANGFUSE_SECRET_KEY \
+              -e OPENAI_API_KEY \
+              -e OPENROUTER_API_KEY \
+              -e WANDB_API_KEY \
+              airas-repro:latest \
+              bash -c '
+                set -e
+                set -o pipefail
+                echo "=== [REPRODUCE] Start at $(date -u) ==="
+                python -u -m src.main run=reproduction results_dir="'"$RESULTS_DIR"'"
+                echo "=== [REPRODUCE] PASSED at $(date -u) ==="
+              ' > >(tee -a "$RESULTS_DIR/run.log") 2>&1
 
       - name: Run reproduction (native)
         if: steps.check-docker.outputs.has_docker == 'false' || steps.check-docker.outputs.has_dockerfile == 'false' || steps.build-docker.outcome != 'success'
         id: run-native
         continue-on-error: true
-        run: |
-          set -eu
-          cd "$RUN_DIR"
-          uv venv .venv
-          uv pip install --no-cache --python .venv/bin/python hydra-core
-          if [ -f repo/requirements.txt ]; then
-            uv pip install --no-cache --python .venv/bin/python -r repo/requirements.txt 2>&1 | tee -a "$RESULTS_DIR/run.log" || true
-          fi
-          uv pip install --no-cache --python .venv/bin/python -e repo 2>/dev/null || true
-          if [ -f requirements.txt ]; then
-            uv pip install --no-cache --python .venv/bin/python -r requirements.txt 2>&1 | tee -a "$RESULTS_DIR/run.log" || true
-          fi
-          echo "=== [REPRODUCE] Start at $(date -u) ===" | tee -a "$RESULTS_DIR/run.log"
-          .venv/bin/python -u -m src.main run=reproduction results_dir="$RESULTS_DIR" 2>&1 | tee -a "$RESULTS_DIR/run.log"
-          echo "=== [REPRODUCE] PASSED at $(date -u) ===" | tee -a "$RESULTS_DIR/run.log"
+        uses: Wandalen/wretry.action@v3
+        with:
+          attempt_limit: 2
+          attempt_delay: 60000
+          command: |
+            trap 'sleep 1' EXIT
+            (
+              set -e
+              set -o pipefail
+              uv venv .venv
+              uv pip install --no-cache --python .venv/bin/python hydra-core
+              if [ -f .reproduction/repo/requirements.txt ]; then
+                uv pip install --no-cache --python .venv/bin/python -r .reproduction/repo/requirements.txt || true
+              fi
+              uv pip install --no-cache --python .venv/bin/python -e .reproduction/repo 2>/dev/null || true
+              if [ -f requirements.txt ]; then
+                uv pip install --no-cache --python .venv/bin/python -r requirements.txt || true
+              fi
+              echo "=== [REPRODUCE] Start at $(date -u) ==="
+              .venv/bin/python -u -m src.main run=reproduction results_dir="$RESULTS_DIR"
+              echo "=== [REPRODUCE] PASSED at $(date -u) ==="
+            ) > >(tee -a "$RESULTS_DIR/run.log") 2>&1
 
       - name: Determine run outcome
         id: run-outcome
         if: always()
         run: |
           set -eu
-          OUT="$RUN_DIR/$RESULTS_DIR"
           outcome="${{ steps.run-docker.outcome }}${{ steps.run-native.outcome }}"
           STATUS="passed"
-          if [[ "$outcome" != *"success"* ]] || [ ! -f "$OUT/result.json" ]; then
+          if [[ "$outcome" != *"success"* ]] || [ ! -f "$RESULTS_DIR/result.json" ]; then
             STATUS="failed"
-          elif [ ! -f "$OUT/repro.png" ] && [ ! -f "$OUT/repro.md" ]; then
+          elif [ ! -f "$RESULTS_DIR/repro.png" ] && [ ! -f "$RESULTS_DIR/repro.md" ]; then
             STATUS="failed"
           fi
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 
-      # Backup/debug copy of the outputs as an artifact (matching the experiment workflows). The
-      # authoritative copy for fetch_paper_reproduction_results is the git commit below.
+      # Backup/debug copy; the authoritative copy for fetch_paper_reproduction_results is the git commit.
       - name: Upload results
         if: always()
         uses: Wandalen/wretry.action@v3
         with:
           action: actions/upload-artifact@v4
           with: |
-            name: paper-reproduction-${{ github.run_id }}-${{ github.event.inputs.run_id }}
-            path: ${{ env.RUN_DIR }}/${{ env.RESULTS_DIR }}
+            name: paper-reproduction-${{ github.run_id }}
+            path: ${{ env.RESULTS_DIR }}
             if-no-files-found: warn
           attempt_limit: 3
           attempt_delay: 30000
@@ -188,10 +231,10 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
-          git add -- "$RUN_DIR"
+          git add -A -- .reproduction/results
 
           if ! git diff --staged --quiet; then
-            git commit -m "[CI] Paper reproduction run for run_id=$RUN_ID"
+            git commit -m "[CI] Paper reproduction run results"
             git checkout -- .
             for i in {1..5}; do
               git pull --rebase -X theirs origin "$BRANCH_NAME"
@@ -200,7 +243,7 @@ jobs:
               sleep $((2**i))
             done
           else
-            echo "No results to commit for run_id=$RUN_ID"
+            echo "No results to commit."
           fi
 
       - name: Fail job if run did not produce results

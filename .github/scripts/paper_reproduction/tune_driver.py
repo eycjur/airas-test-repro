@@ -10,8 +10,8 @@ Invocation of the reproduction (same Hydra entry point as the run workflow):
   → writes <dir>/result.json with "metrics": [{"name": ..., "value": ...}, ...]
 
 Usage:
-  python tune_driver.py --original-run-dir jobs/<id> --tune-output-dir jobs/<tid>/outputs \
-      --python jobs/<id>/.venv/bin/python [--n-trials 20]
+  python tune_driver.py --original-run-dir . --tune-output-dir .reproduction/tuning \
+      --python .venv/bin/python [--n-trials 20]
 """
 
 from __future__ import annotations

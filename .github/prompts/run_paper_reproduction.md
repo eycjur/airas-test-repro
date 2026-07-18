@@ -3,8 +3,8 @@ as Hydra-configured code, running in GitHub Actions. You do NOT run the experime
 workflow runs it later, agentlessly.
 
 Task:
-- Fetch and read the paper, then produce `paper.txt`, `config/config.yaml`, `config/run/reproduction.yaml`,
-  and `src/main.py` under jobs/$RUN_ID/.
+- Fetch and read the paper, then produce `.reproduction/paper.txt`, `config/config.yaml`,
+  `config/run/reproduction.yaml`, and `src/main.py` at the repository root.
 - `src/main.py` must, when run, perform the experiment and write the figure/table + result.json.
 
 Core Principle:
@@ -12,29 +12,31 @@ Core Principle:
 - Never hardcode, mock, or reverse-engineer the paper's known results — the output is audited later.
 
 Constraints:
-- First, run `cd jobs/$RUN_ID` (see RUN_ID at the end). All relative paths are relative to that directory.
 - Do not run git commands against this runner repository (no commit, push, pull, checkout, or branch switch);
-  committing is handled by the workflow. Cloning the paper's implementation repo into repo/ is fine.
-- Do NOT create outputs/ or execute src/main.py — the run workflow does that.
+  committing is handled by the workflow. Cloning the paper's implementation repo into .reproduction/repo/ is fine.
+- Do NOT execute src/main.py or create .reproduction/results/ — the run workflow does that.
 - Keep everything runnable on a Linux runner from a fresh venv (declare extra deps in requirements.txt).
 
 Tool Use:
 - Available tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch.
 
-Directory Layout (under jobs/$RUN_ID/):
-- paper.txt          : you create this (transcription of the paper; later validation reads it).
-- repo/              : the implementation repository (already cloned; if missing, WebSearch and clone it).
-- config/config.yaml : Hydra root config (defaults, results_dir).
-- config/run/reproduction.yaml : the single run config holding this reproduction's parameters.
-- src/main.py        : @hydra.main entry point (you write this).
+Layout (at the repository root):
+- .reproduction/paper.txt : you create this (transcription of the paper; later validation reads it).
+- .reproduction/repo/      : the implementation repository (already cloned; if missing, WebSearch and clone it).
+- config/config.yaml       : Hydra root config (defaults, results_dir).
+- config/run/reproduction.yaml : the run config holding this reproduction's parameters.
+- src/main.py              : @hydra.main entry point (you write this).
 
 Understand the Paper (do this first):
-- Fetch PAPER_URL yourself and save a transcription (sections, captions, tables) to `paper.txt`.
-- Identify exactly which result the target figure/table (TARGET_KIND/TARGET_NUMBER) shows: the claim,
-  proposed method vs baselines, dataset/metric/conditions, and figure axes/series or table rows/cols.
-- Early exit: if the target cannot be identified, or the experiment strictly requires a GPU and no CPU
-  substitution works, do NOT write src/main.py. Instead write `outputs/result.json` with
-  `{"error": "target_not_found" | "gpu_required", "summary": "(explanation)"}` and stop.
+- Fetch PAPER_URL yourself and save a transcription (sections, captions, tables) to `.reproduction/paper.txt`.
+- From the paper and INSTRUCTION, choose exactly one figure or table to reproduce. Prefer an explicit
+  figure/table named in INSTRUCTION; otherwise pick the main quantitative result that best supports
+  the paper's primary claim. Record your choice (e.g. "Figure 3" / "Table 2") in the summary.
+- Identify exactly which result that figure/table shows: the claim, proposed method vs baselines,
+  dataset/metric/conditions, and figure axes/series or table rows/cols.
+- Early exit: if no suitable target can be identified, or the experiment strictly requires a GPU and no
+  CPU substitution works, do NOT write src/main.py. Instead write `.reproduction/results/result.json`
+  with `{"error": "target_not_found" | "gpu_required", "summary": "(explanation)"}` and stop.
 - CPU substitution: if allowed, design a qualitative reproduction that runs on CPU (small HF model /
   sklearn / n-gram; a few dozen–hundred examples). Declare it in the config (`source: "substituted"`).
 
@@ -59,17 +61,17 @@ Run Config Generation (Hydra):
   ```yaml
   defaults:
     - run: reproduction
-  results_dir: outputs
+  results_dir: .reproduction/results
   ```
 
 Experiment Code (src/main.py):
 - Use `@hydra.main(version_base=None, config_path="../config", config_name="config")`.
 - Read every parameter from `cfg.run.<name>` so Hydra CLI overrides (`run.learning_rate=0.01`) work.
-- Find the experiment code in repo/ (reuse or import from it; implement from the paper's equations if absent).
+- Find the experiment code in .reproduction/repo/ (reuse or import from it; implement from the paper if absent).
 - Run the actual experiment (fix seeds; run under the paper's conditions or the declared substitution).
   For a comparison against baselines, run only the proposed method — never plot/tabulate/transcribe
   baseline numbers into the deliverable.
-- Write deliverables into `cfg.results_dir` (default `outputs`):
+- Write deliverables into `cfg.results_dir` (default `.reproduction/results`):
   - figure target → `<results_dir>/repro.png`  (matplotlib: `matplotlib.use("Agg")`).
   - table  target → `<results_dir>/repro.md`   (Markdown table only; proposed method row/col only).
   - always → `<results_dir>/result.json` (schema below).
@@ -99,16 +101,25 @@ result.json Schema (src/main.py writes this at run time, into results_dir):
   (measured by you, never transcribed). For a figure, `note` pinpoints the series/x-value. The
   `optuna.objective` in the config must equal one of these `metrics[].name`.
 
-Required Files (under jobs/$RUN_ID/):
-- paper.txt
+Required Files:
+- .reproduction/paper.txt
 - config/config.yaml
 - config/run/reproduction.yaml
 - src/main.py
-- requirements.txt  (only if extra packages beyond repo/ are needed)
+- requirements.txt  (only if extra packages beyond .reproduction/repo/ are needed)
+- Dockerfile        (optional; see below)
+
+Optional Docker:
+- If you write a Dockerfile at the repository root, the run workflow builds it and runs the experiment
+  inside the container; otherwise it runs natively with uv.
+- The Dockerfile must set `WORKDIR /workspace`, COPY src/ config/ (and .reproduction/repo/ if src/main.py
+  imports it) and requirements.txt, install the dependencies, and leave `python -m src.main` runnable.
+  results_dir (.reproduction/results) is bind-mounted, so write deliverables there as usual.
 
 Command Line Interface:
-- The run workflow later executes exactly this (do NOT run it yourself):
-  - uv run python -u -m src.main run=reproduction results_dir=outputs
+- The run workflow later executes this (do NOT run it yourself):
+  - native: uv run python -u -m src.main run=reproduction results_dir=.reproduction/results
+  - docker: python -u -m src.main run=reproduction results_dir=.reproduction/results  (inside the container)
 
 Syntax Validation After Writing:
 - After writing the files, verify syntax only, then fix and re-check any errors:
@@ -122,11 +133,8 @@ Principles:
 - A qualitative reproduction is the goal, not an exact numeric match; record discrepancies honestly.
 
 Output:
-- Make all file changes directly under jobs/$RUN_ID/. Do not ask for permission; proceed autonomously.
+- Make all file changes directly in the workspace. Do not ask for permission; proceed autonomously.
 
-RUN_ID:
 PAPER_URL:
 INSTRUCTION:
-TARGET_KIND:
-TARGET_NUMBER:
 REPO_URL:
