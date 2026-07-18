@@ -8,6 +8,9 @@ on:
         description: 'Branch name (e.g., main)'
         required: true
         default: 'main'
+      repro_id:
+        description: 'Reproduction ID (directory name under .reproduction/)'
+        required: true
       paper_url:
         description: 'URL of the paper to reproduce (the agent fetches and reads it itself)'
         required: true
@@ -48,6 +51,9 @@ defaults:
   run:
     shell: bash
 
+env:
+  REPRO_DIR: .reproduction/${{ github.event.inputs.repro_id }}
+
 jobs:
   generate:
     name: Generate Reproduction Code
@@ -61,7 +67,7 @@ jobs:
           ref: ${{ github.event.inputs.branch_name }}
 
       - name: Prepare reproduction directory
-        run: mkdir -p .reproduction
+        run: mkdir -p "$REPRO_DIR"
 
       - name: Clone target paper repository
         if: github.event.inputs.repo_url != ''
@@ -69,7 +75,7 @@ jobs:
           REPO_URL: ${{ github.event.inputs.repo_url }}
         run: |
           set -eu
-          git clone --depth 1 -- "$REPO_URL" .reproduction/repo
+          git clone --depth 1 -- "$REPO_URL" "$REPRO_DIR/repo"
 
       - name: Build generation prompt
         id: build-prompt
@@ -93,6 +99,7 @@ jobs:
             echo "INSTRUCTION:"
             printf "%s\n" "$INSTRUCTION"
             echo "REPO_URL: $REPO_URL"
+            echo "REPRO_DIR: $REPRO_DIR"
           } > "$PROMPT_FILE"
 
           echo "prompt_file=$PROMPT_FILE" >> "$GITHUB_OUTPUT"
@@ -141,8 +148,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
-          git add -A -- config src .reproduction
-          git add -- requirements.txt Dockerfile 2>/dev/null || true
+          git add -A -- "$REPRO_DIR"
 
           if ! git diff --staged --quiet; then
             git commit -m "[CI] Paper reproduction generate using ${{ github.event.inputs.github_actions_agent }}"
