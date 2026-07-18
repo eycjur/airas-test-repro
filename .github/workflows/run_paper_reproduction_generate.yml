@@ -16,8 +16,9 @@ on:
         required: false
         default: ''
       instruction:
-        description: 'Natural language reproduction instruction (may hint which figure/table; the agent picks the target from the paper)'
-        required: true
+        description: 'Natural language reproduction instruction (may hint which figure/table; empty: the agent picks the target from the paper)'
+        required: false
+        default: ''
       github_actions_agent:
         description: 'AI agent tool to use (claude_code or open_code)'
         required: true
