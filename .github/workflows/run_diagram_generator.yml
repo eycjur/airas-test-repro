@@ -15,7 +15,7 @@ on:
       output_dir:
         description: 'Directory to save generated diagrams'
         required: false
-        default: '.research/diagrams'
+        default: '.research/results/diagram'
       github_actions_agent:
         description: 'AI agent tool to use (claude_code or open_code)'
         required: true
