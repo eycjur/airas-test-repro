@@ -66,6 +66,21 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Figures live in .research/results/ and .research/diagrams/ and are
+      # materialized into the LaTeX images/ directory at build time (structure
+      # preserved), so no prepare_images_for_latex run or committed copy is
+      # required beforehand. LaTeX references them as images/<relative path>.
+      - name: Materialize figures into the LaTeX images directory
+        run: |
+          mkdir -p "$LATEX_DIR/images"
+          for dir in .research/results .research/diagrams; do
+            if [ -d "$dir" ]; then
+              rsync -am --include='*/' --include='*.pdf' --exclude='*' "$dir/" "$LATEX_DIR/images/"
+            fi
+          done
+          echo "Figures available to LaTeX:"
+          find "$LATEX_DIR/images" -type f | sort || true
+
       - name: Install LaTeX, ChkTeX, and other dependencies
         uses: Wandalen/wretry.action@v3
         with:
