@@ -1,0 +1,16 @@
+{
+  "summary": "## Parameter tuning\n\n| Item | Value |\n|---|---|\n| Method | Optuna (TPE) |\n| Trials | 20 |\n| Objective | sum_radii (maximize) |\n| Best trial | #15 → 1.58382 |\n\n## Best parameters\n\n```json\n{\n  \"inner_ring_radius\": 0.3083632832806178,\n  \"outer_ring_radius\": 0.5028852815623409,\n  \"optimization_method\": \"simple_greedy\"\n}\n```\n\n## Final performance\n\nsum_radii = 1.58382 (best params re-run)\n",
+  "artifacts": [
+    "tuning_figure.png"
+  ],
+  "best_params": {
+    "inner_ring_radius": 0.3083632832806178,
+    "outer_ring_radius": 0.5028852815623409,
+    "optimization_method": "simple_greedy"
+  },
+  "best_value": 1.58382,
+  "objective": {
+    "metric": "sum_radii",
+    "direction": "maximize"
+  }
+}
