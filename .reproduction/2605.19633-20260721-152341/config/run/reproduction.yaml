@@ -1,0 +1,24 @@
+run_id: reproduction
+
+# Circle packing parameters
+n_circles: 26                    # source: paper, note: same as paper §4.7
+max_iterations: 100              # source: substituted, note: paper uses LLM-based optimization with 63-200 evaluations; substituted with 100 iterations of gradient-based optimization for CPU-only compute
+seed: 42                         # source: assumed, note: not stated in the paper
+optimization_method: "lbfgsb"    # source: substituted, note: paper's discovered algorithm uses L-BFGS-B as one component; we use it directly for simplification
+initial_radius: 0.03             # source: assumed, note: starting radius for initialization, not stated in the paper
+learning_rate: 0.1               # source: assumed, note: step size for optimization, not stated in the paper
+convergence_tol: 1e-6            # source: assumed, note: convergence tolerance, not stated in the paper
+
+# Visualization
+save_plot: true                  # source: assumed, note: for generating the reproduction figure
+plot_interval: 10                # source: assumed, note: how often to record progress points
+
+# Optuna hyperparameter search space (for future tuning)
+optuna:
+  objective: sum_radii           # must equal a metric name written to result.json
+  direction: maximize
+  n_trials: 20
+  search_space:
+    max_iterations: {type: int, low: 50, high: 500}
+    learning_rate: {type: float, low: 0.01, high: 1.0, log: false}
+    initial_radius: {type: float, low: 0.01, high: 0.05, log: false}

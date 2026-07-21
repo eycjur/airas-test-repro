@@ -1,0 +1,75 @@
+# optimize_anything: A Universal API for Optimizing any Text Parameter
+
+## Paper Information
+- arXiv ID: 2605.19633v1
+- Title: optimize_anything: A Universal API for Optimizing any Text Parameter
+- Authors: Lakshya A Agrawal, Donghyun Lee, Shangyin Tan, et al. (UC Berkeley, MIT)
+- Venue: ACM Conference on AI and Agentic Systems (CAIS '26), May 2026
+
+## Abstract
+The paper presents a single LLM-based optimization system that achieves state-of-the-art results across six diverse tasks by formulating optimization problems as improving text artifacts evaluated by scoring functions. The system supports single-task search, multi-task search with cross-problem transfer, and generalization to unseen inputs.
+
+Key achievements:
+- Agent architectures: nearly triple Gemini Flash's ARC-AGI accuracy (32.5% → 89.5%)
+- Cloud scheduling: cut costs by 40%
+- CUDA kernels: 87% match or beat PyTorch
+- Circle packing: outperforms AlphaEvolve's solution (n=26)
+
+## Circle Packing Experiment (Section 4.7)
+
+### Task
+Pack n=26 circles while maximizing the sum of radii within a unit square [0,1] × [0,1].
+
+### Setup
+- The system optimizes the packing algorithm code (not just parameters)
+- The evaluator executes the proposed packing code and returns:
+  - Score: sum of circle radii
+  - Side information: circle positions, radii, constraint violations, overlap distances, boundary violations, and rendered visualization
+
+### Constraints
+1. All circles must be fully inside [0,1]×[0,1]: 0 ≤ x-r, x+r ≤ 1 and 0 ≤ y-r, y+r ≤ 1
+2. No overlaps: distance between centers ≥ sum of radii
+3. Execution must complete within timeout (600 seconds)
+
+### Results (Table 2, Figure 7)
+- optimize_anything achieved: 2.63598+ (best sum of radii)
+- Outperformed:
+  - AlphaEvolve's solution
+  - OpenEvolve at 100 iterations: 2.4583
+  - OpenEvolve at 200 iterations: 2.6307
+- Achieved in 63 evaluations (cost: ~$3.18)
+
+### Controlled Comparison (Table: tab:circle-controlled)
+Comparison with OpenEvolve using same proposer LLM (GPT-5.1):
+| Metric            | optimize_anything | OpenEv.@100 | OpenEv.@200 |
+|-------------------|-------------------|-------------|-------------|
+| Evaluations       | 63/100            | 100         | 200         |
+| Best sum_radii    | **2.63598**       | 2.4583      | 2.6307      |
+| Cost              | $3.18             | $1.98       | $6.85       |
+
+### Optimized Algorithm
+The system discovered a bilevel optimizer:
+- LP (Linear Programming) over radii
+- Dual-variable gradients for L-BFGS-B center optimization
+- Augmented by CMA-ES exploration
+- Diverse seeding strategies
+
+### Ablation Study
+Side information (SI) vs score-only feedback (Section 5.2):
+- With SI: 100% of best score achieved
+- Score-only: 93.96% of best score
+- SI enables 4-6× faster convergence and substantially higher final performance
+
+## Reproduction Target
+**Figure 7 (fig:circle)**: Line chart showing optimization progress over evaluation iterations
+- X-axis: Number of evaluations (metric calls)
+- Y-axis: Best sum of radii achieved
+- Series to reproduce: optimize_anything (proposed method)
+- Expected behavior: progressive improvement reaching ~2.636
+
+## Implementation Details
+- Seed code: Simple geometric initialization (ring patterns)
+- Warm-starting: best circle configuration passed to new candidates
+- Refiner LLM iterates on candidates between generations
+- Framework: GEPA (Genetic-Pareto optimization)
+- Repository: https://github.com/gepa-ai/gepa
