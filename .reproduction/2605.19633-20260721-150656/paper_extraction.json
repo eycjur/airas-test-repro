@@ -1,0 +1,20 @@
+{
+  "parameters": [
+    {
+      "name": "num_circles",
+      "value": "26"
+    },
+    {
+      "name": "unit_square_min",
+      "value": "0"
+    },
+    {
+      "name": "unit_square_max",
+      "value": "1"
+    },
+    {
+      "name": "target_score",
+      "value": "2.63598"
+    }
+  ]
+}

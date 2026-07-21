@@ -1,0 +1,68 @@
+# optimize_anything: A Universal API for Optimizing any Text Parameter
+
+## Authors
+Lakshya A Agrawal, Donghyun Lee, Shangyin Tan, Wenjie Ma, Karim Elmaaroufi, Rohit Sandadi, Sanjit A. Seshia, Koushik Sen, Dan Klein, Ion Stoica, Joseph E. Gonzalez, Omar Khattab, Alexandros G. Dimakis, Matei Zaharia (UC Berkeley, MIT)
+
+## Abstract
+The paper demonstrates that a single LLM-based optimization system can match specialized tools across fundamentally different domains. When optimization problems are formulated as improving a text artifact evaluated by a scoring function, the system achieves state-of-the-art results across six diverse tasks including:
+- Agent architectures that nearly triple Gemini Flash's ARC-AGI accuracy (32.5% → 89.5%)
+- Scheduling algorithms that cut cloud costs by 40%
+- CUDA kernels where 87% match or beat PyTorch
+- Circle packing solution outperforming AlphaEvolve's reported benchmarks (n=26)
+
+## Section 5.5: Circle Packing (Single-Task Search)
+
+### Setup
+The task is to pack n=26 circles while maximizing the sum of radii within a unit square. optimize_anything optimizes the packing algorithm code; the evaluator executes the proposed packing code, and returns the score plus geometric diagnostics.
+
+### Side Information (SI) Design
+Circle positions, radii, constraint violations, overlap distances, boundary violations, and a rendered visualization of the packing.
+
+### Results
+optimize_anything reaches a score of 2.63598+, outperforming AlphaEvolve's, OpenEvolve's, and ShinkaEvolve's reported solution (Figure 7). The optimized algorithm is a bilevel optimizer: an LP over radii with dual-variable gradients for L-BFGS-B center optimization, augmented by CMA-ES exploration and diverse seeding strategies.
+
+### Controlled Comparison with OpenEvolve (Table 4)
+To address concerns about comparing against published rather than reproduced results, the authors ran OpenEvolve (open-source reimplementation of AlphaEvolve) under matched conditions using the same proposer LLM (GPT-5.1):
+- optimize_anything: 63/100 evaluations, best sum_radii = 2.63598, cost = $3.18
+- OpenEvolve@100: 100 evaluations, best sum_radii = 2.4583, cost = $1.98
+- OpenEvolve@200: 200 evaluations, best sum_radii = 2.6307, cost = $6.85
+
+optimize_anything achieved a superior score (2.63598) in just 63 evaluations, while OpenEvolve failed to match this performance even when given over three times the evaluation budget.
+
+## Section 6.2: Side Information Ablation
+
+### Cross-domain SI ablation (Table 6)
+SI vs. score-only ablations on circle packing and CUDA kernels confirm generalization:
+- Circle Packing: SI achieves optimal solution (100% of best), score-only reaches 93.96%
+- SI reveals which failure mode to address next; without it, the proposer can only observe that the score changed
+
+The paper shows that actionable side information yields 4-6× faster convergence and substantially higher final performance versus score-only feedback.
+
+## Section 7: Discussion
+
+### When does multi-task search hurt?
+Multi-task search can degrade performance when tasks lack shared transferable structure. The paper quantifies this on circle packing (Table 9), where optimizing different values of N jointly introduces noise rather than useful cross-transfer - unlike CUDA kernels, circle packing problems for different N are fundamentally independent.
+
+## Optimization Target
+For this reproduction, we focus on the circle packing experiment (n=26) from Section 5.5. This is a single-task search problem where:
+- Artifact: Python code implementing a circle packing algorithm
+- Objective: Maximize the sum of circle radii
+- Constraint: All circles must fit within a unit square [0,1]×[0,1] without overlapping
+- Target Score: 2.63598+ (as reported in the paper)
+- Evaluation: Execute the packing code, check constraints, compute sum of radii
+
+## Key Insights from the Paper
+
+The paper's main contribution is showing that a single LLM-based optimization system (optimize_anything) can work across diverse domains by:
+1. Treating optimization problems as improving text artifacts
+2. Using actionable side information (SI) as first-class feedback
+3. Maintaining a Pareto frontier for candidate selection
+4. Supporting three modes: single-task, multi-task, and generalization
+
+For circle packing specifically, the system evolved from a simple geometric seed (1 center + 2 rings) to a sophisticated bilevel optimizer combining:
+- Linear programming for radius optimization
+- L-BFGS-B for center placement
+- CMA-ES for exploration
+- Diverse seeding strategies
+
+The reproduction demonstrates the baseline seed algorithm and the evaluation framework, showing the gap that LLM-based optimization bridges to reach the target score.

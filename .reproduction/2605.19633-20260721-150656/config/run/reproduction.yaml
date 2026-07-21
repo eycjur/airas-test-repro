@@ -1,0 +1,21 @@
+run_id: reproduction
+
+# Circle packing experiment parameters
+num_circles: 26  # source: paper, note: same as paper §5.5 (Table 4, n=26)
+timeout: 600     # source: assumed, note: execution timeout in seconds, repo code uses 600s
+unit_square_min: 0.0  # source: paper, note: unit square bounds [0,1]×[0,1] from §5.5
+unit_square_max: 1.0  # source: paper, note: unit square bounds [0,1]×[0,1] from §5.5
+tolerance: 1e-6       # source: assumed, note: numerical tolerance for overlap/boundary checks
+seed: 42              # source: assumed, note: random seed for reproducibility
+
+# Target benchmark
+target_score: 2.63598  # source: paper, note: best score from Table 4 and §5.5
+
+# Optimization parameters (not used in this simplified reproduction, just for reference)
+optuna:
+  objective: sum_radii
+  direction: maximize
+  n_trials: 20
+  search_space:
+    # This would be used for hyperparameter tuning (not in scope for this reproduction)
+    # Example: optimization algorithm parameters
