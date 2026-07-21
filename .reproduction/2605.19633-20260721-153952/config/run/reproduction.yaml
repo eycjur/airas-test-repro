@@ -1,0 +1,37 @@
+run_id: reproduction
+
+# Circle packing parameters
+n_circles: 26  # source: paper, note: same as paper §4.3 (n=26 circles)
+unit_square: [0, 1]  # source: paper, note: unit square [0,1] × [0,1] as stated in paper §4.3
+
+# Execution parameters
+timeout: 600  # source: paper, note: paper mentions 600s timeout for code execution
+max_iterations: 100  # source: assumed, note: not stated in paper; based on Table 2 showing 63/100 evaluations
+
+# Seed strategy parameters
+seed_type: "ringed"  # source: paper, note: seed uses ring pattern (1 center + 8 inner ring + 17 outer ring) from ShinkaEvolve
+center_position: [0.5, 0.5]  # source: paper, note: center circle at (0.5, 0.5) in seed
+inner_ring_count: 8  # source: paper, note: 8 circles in inner ring at radius 0.3
+inner_ring_radius: 0.3  # source: paper, note: inner ring at radius 0.3 from center
+outer_ring_count: 17  # source: paper, note: 17 circles in outer ring at radius 0.7
+outer_ring_radius: 0.7  # source: paper, note: outer ring at radius 0.7 from center
+
+# Optimization method (for simple reproduction)
+optimization_method: "simple_greedy"  # source: substituted, note: paper's evolved algorithm uses LP + L-BFGS-B + CMA-ES + SLP (480+ lines); substituted with simple greedy for CPU-only compute
+
+# Validation constraints
+overlap_tolerance: 1e-6  # source: assumed, note: not stated in paper; standard floating-point tolerance
+boundary_tolerance: 1e-6  # source: assumed, note: not stated in paper; standard floating-point tolerance
+
+# Random seed
+seed: 42  # source: assumed, note: not stated in the paper
+
+# Optuna hyperparameter tuning configuration (for future tuning)
+optuna:
+  objective: sum_radii  # must equal a metric name written to result.json
+  direction: maximize
+  n_trials: 20
+  search_space:
+    inner_ring_radius: {type: float, low: 0.2, high: 0.4, log: false}
+    outer_ring_radius: {type: float, low: 0.5, high: 0.8, log: false}
+    optimization_method: {type: categorical, choices: ["simple_greedy", "iterative_greedy"]}

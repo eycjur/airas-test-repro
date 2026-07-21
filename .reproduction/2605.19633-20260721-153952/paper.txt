@@ -1,0 +1,80 @@
+# optimize_anything: A Universal API for Optimizing any Text Parameter
+
+## Authors
+Lakshya A Agrawal, Donghyun Lee, Shangyin Tan, Wenjie Ma, Karim Elmaaroufi, Rohit Sandadi,
+Sanjit A. Seshia, Koushik Sen, Dan Klein, Ion Stoica, Joseph E. Gonzalez, Omar Khattab,
+Alexandros G. Dimakis, Matei Zaharia (UC Berkeley & MIT)
+
+## Abstract
+This paper demonstrates that a single LLM-based optimization system can match specialized tools across
+fundamentally different domains. When optimization problems are formulated as improving a text artifact
+evaluated by a scoring function, the proposed system achieves state-of-the-art results across six diverse
+tasks: agent architectures (ARC-AGI accuracy: 32.5% → 89.5%), scheduling algorithms (40% cloud cost
+reduction), CUDA kernels (87% match or beat PyTorch), and outperforming AlphaEvolve's circle packing
+solution (n=26).
+
+## Circle Packing Experiment (Section 4.3)
+
+### Setup
+- Task: Pack n=26 circles in a unit square [0,1] × [0,1]
+- Objective: Maximize sum of circle radii
+- Optimization target: The packing algorithm code itself (not parameters)
+- Evaluator: Executes proposed packing code and returns score + geometric diagnostics
+
+### Side Information (SI) Design
+The evaluator returns:
+- Circle positions and radii
+- Constraint violations
+- Overlap distances
+- Boundary violations
+- Rendered visualization of the packing
+
+### Results (Figure 3, Table 2)
+- optimize_anything achieves score: 2.63598+ (best)
+- Outperforms AlphaEvolve, OpenEvolve, and ShinkaEvolve
+- Controlled comparison (Table 2): optimize_anything vs OpenEvolve using same proposer (GPT-5.1)
+  - optimize_anything: 2.63598 in 63 evaluations (~$3.18)
+  - OpenEvolve@100: 2.4583 in 100 evaluations ($1.98)
+  - OpenEvolve@200: 2.6307 in 200 evaluations ($6.85)
+
+### Table 2: Controlled comparison of optimize_anything vs. OpenEvolve on circle packing (n=26)
+| Metric        | optimize_anything | OpenEv.@100 | OpenEv.@200 |
+|---------------|-------------------|-------------|-------------|
+| Evaluations   | 63 / 100          | 100         | 200         |
+| Best sum_radii| 2.63598          | 2.4583      | 2.6307      |
+| Cost          | $3.18            | $1.98       | $6.85       |
+
+### Optimized Algorithm Architecture (Appendix C.2)
+The evolved algorithm (480+ lines) is a bilevel optimizer with:
+1. LP over radii with dual-variable sensitivities providing exact gradients for center optimization
+2. L-BFGS-B over centers using LP-derived gradients
+3. Block SLP trust-region boosts targeting worst-performing circles
+4. CMA-ES global exploration with automatic restarts
+5. Aggressive relocation of smallest circles to edges and corners
+6. Six diverse seeding strategies: hexagonal, uniform, edge-ring, farthest-point, corner-spokes, edge-biased hex
+
+### Side Information Ablation (Table 3)
+Table 3 shows SI vs. score-only ablation across domains:
+- Circle Packing with SI: 100% of best score
+- Circle Packing score-only: 93.96% of best score
+This confirms that actionable side information (geometric diagnostics) yields substantially higher
+final performance than score-only feedback.
+
+## Key Findings
+1. Single-task search mode: No dataset. Candidate IS the solution; evaluator scores it directly
+2. Side information reveals WHICH failure mode to address next (e.g., collapsed radii → switch to LP)
+3. Dual-artifact optimization: Both code and refiner prompt tracked on Pareto front
+4. Multi-task search can degrade performance when tasks lack shared structure (different N values
+   in circle packing are fundamentally independent)
+
+## Constraints
+- All circles must be fully inside unit square: 0 ≤ x-r, x+r ≤ 1 and 0 ≤ y-r, y+r ≤ 1
+- No overlaps: distance between centers ≥ sum of radii
+- Code execution timeout: <600 seconds
+
+## Seed Algorithm (from ShinkaEvolve)
+Simple greedy packing with:
+- 1 circle at center (0.5, 0.5)
+- Ring of 8 circles around center at radius 0.3
+- Outer ring of 17 circles at radius 0.7
+- Radii computed to avoid overlaps and boundaries
