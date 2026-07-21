@@ -69,6 +69,23 @@ jobs:
       - name: Prepare reproduction directory
         run: mkdir -p "$REPRO_DIR"
 
+      - name: Install uv
+        uses: Wandalen/wretry.action@v3
+        with:
+          action: astral-sh/setup-uv@v6
+          with: |
+            python-version: "3.11"
+          attempt_limit: 3
+          attempt_delay: 30000
+
+      - name: Fetch arXiv TeX source (if applicable)
+        env:
+          PAPER_URL: ${{ github.event.inputs.paper_url }}
+        run: |
+          uv run python3 .github/scripts/paper_reproduction/fetch_arxiv_tex_source.py \
+            --paper-url "$PAPER_URL" \
+            --repro-dir "$REPRO_DIR"
+
       - name: Clone target paper repository
         if: github.event.inputs.repo_url != ''
         env:
@@ -140,6 +157,59 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      # Paper extraction runs in its own agent process, after code generation, so it only ever sees
+      # the parameter key schema (below) — never the config values the code-generation agent chose.
+      # claude_code only for now; open_code isn't wired up here.
+      - name: Extract parameter key schema from generated config
+        id: extract-schema
+        if: github.event.inputs.github_actions_agent == 'claude_code'
+        run: |
+          set -eu
+          CONFIG_PATH="$REPRO_DIR/config/run/reproduction.yaml"
+          if [ ! -f "$CONFIG_PATH" ]; then
+            echo "::warning::$CONFIG_PATH not found (early exit or generation failure); skipping paper extraction."
+            echo "has_schema=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PARAM_KEYS=$(uv run --with pyyaml python3 .github/scripts/paper_reproduction/extract_config_keys.py --config "$CONFIG_PATH")
+          if [ -z "$PARAM_KEYS" ]; then
+            echo "::warning::No parameter keys found in $CONFIG_PATH; skipping paper extraction."
+            echo "has_schema=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has_schema=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "param_keys<<PARAM_KEYS_EOF"
+            echo "$PARAM_KEYS"
+            echo "PARAM_KEYS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build paper extraction prompt
+        id: build-extraction-prompt
+        if: steps.extract-schema.outputs.has_schema == 'true'
+        env:
+          PARAM_KEYS: ${{ steps.extract-schema.outputs.param_keys }}
+        run: |
+          set -e
+          PROMPT_FILE="/tmp/paper_extraction_prompt.txt"
+          {
+            cat ".github/prompts/run_paper_extraction.md"
+            echo "REPRO_DIR: $REPRO_DIR"
+            printf "%s\n" "$PARAM_KEYS"
+          } > "$PROMPT_FILE"
+          echo "prompt_file=$PROMPT_FILE" >> "$GITHUB_OUTPUT"
+          echo "Prompt saved to: $PROMPT_FILE ($(wc -c < "$PROMPT_FILE") bytes)"
+
+      - name: Run Claude Code for paper extraction
+        if: steps.extract-schema.outputs.has_schema == 'true'
+        uses: ./.github/actions/run-claude-code
+        with:
+          prompt_file: ${{ steps.build-extraction-prompt.outputs.prompt_file }}
+          model_name: ${{ github.event.inputs.model_name }}
+          timeout_minutes: '15'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Commit and push generated code
         env:

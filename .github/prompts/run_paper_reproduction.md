@@ -26,6 +26,10 @@ Tool Use:
 - Available tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch.
 
 Layout (all inside REPRO_DIR):
+- REPRO_DIR/tex_src/   : arXiv's TeX source, already fetched and extracted for you when the paper is
+                          on arXiv and has one (absent otherwise — a PDF-only submission or non-arXiv
+                          paper). Table numbers and macro definitions are read more accurately from
+                          here than from PDF text, so prefer it over paper.txt when present.
 - REPRO_DIR/paper.txt : you create this (transcription of the paper; later validation reads it).
 - REPRO_DIR/repo/      : the implementation repository (already cloned; if missing, WebSearch and clone it).
 - REPRO_DIR/config/config.yaml       : Hydra root config (defaults, results_dir).
@@ -33,7 +37,9 @@ Layout (all inside REPRO_DIR):
 - REPRO_DIR/src/main.py              : @hydra.main entry point (you write this).
 
 Understand the Paper (do this first):
-- Fetch PAPER_URL yourself and save a transcription (sections, captions, tables) to `REPRO_DIR/paper.txt`.
+- If `REPRO_DIR/tex_src/` exists, Grep/Read it first — it has the paper's exact tables, equations, and
+  macro definitions. Otherwise (or in addition), fetch PAPER_URL yourself. Either way, save a
+  transcription (sections, captions, tables) to `REPRO_DIR/paper.txt`.
 - From the paper and INSTRUCTION, choose exactly one figure or table to reproduce. Prefer an explicit
   figure/table named in INSTRUCTION; otherwise pick the main quantitative result that best supports
   the paper's primary claim. Record your choice (e.g. "Figure 3" / "Table 2") in the summary.
@@ -46,15 +52,30 @@ Understand the Paper (do this first):
   sklearn / n-gram; a few dozen–hundred examples). Declare it in the config (`source: "substituted"`).
 
 Run Config Generation (Hydra):
-- REPRO_DIR/config/run/reproduction.yaml holds every experiment parameter, named so tuning can override them via
-  Hydra CLI (e.g. `run.learning_rate=0.01`), plus the `optuna` search space for later tuning:
+- REPRO_DIR/config/run/reproduction.yaml holds every experiment parameter/condition — not just the
+  ones you plan to tune. Fixed conditions (dataset, model, seed, optimizer, evaluation metric, etc.)
+  belong here too, exactly like tunable hyperparameters; `optuna.search_space` below is only the
+  subset you additionally expose for tuning, named so tuning can override them via Hydra CLI (e.g.
+  `run.learning_rate=0.01`).
+- Annotate every parameter with a `# source: ..., note: ...` comment right where you decide its
+  value, while the paper is freshest in mind. This comment is the only record of `source`/`note`
+  (result.json no longer carries parameters — see below) and is cross-checked against the paper later:
+  - `source`: where the value came from (`paper` / `assumed` / `paper_unspecified` / `substituted`).
+  - `note`: a short justification tied to `source`, not a generic label:
+    - `paper` → cite where in the paper ("same as paper §5.6", "same as paper Table 2").
+    - `substituted` → state the paper's original value and why it was replaced ("paper uses
+      ResNet-50; substituted with ResNet-18 for CPU-only compute").
+    - `assumed` / `paper_unspecified` → say so plainly ("not stated in the paper").
   ```yaml
   run_id: reproduction
-  learning_rate: 0.01
-  batch_size: 64
-  epochs: 10
-  # ... any parameters needed to verify the paper's claim
-  optuna:                 # search space for later hyperparameter tuning
+  dataset: "CIFAR-10"      # source: paper, note: same as paper §4.1
+  model: "ResNet-18"       # source: substituted, note: paper uses ResNet-50; substituted with ResNet-18 for CPU-only compute
+  seed: 42                 # source: assumed, note: not stated in the paper
+  learning_rate: 0.01      # source: paper, note: same as paper §5.6
+  batch_size: 64           # source: paper_unspecified, note: not stated in the paper
+  epochs: 10               # source: paper, note: same as paper Table 2
+  # ... any other parameters needed to verify the paper's claim, each with a source/note comment
+  optuna:                 # search space for later hyperparameter tuning (a subset of the above)
     objective: accuracy   # must equal a metric name written to result.json
     direction: maximize
     n_trials: 20
@@ -90,19 +111,12 @@ result.json Schema (src/main.py writes this at run time, into results_dir):
 {
   "summary": "(Markdown; ## Task / ## Experimental setup / ## Reproduction result)",
   "artifacts": ["repro.png"],
-  "parameters": [
-    {"name": "learning_rate", "value": "0.01", "source": "paper"},
-    {"name": "batch_size", "value": "64", "source": "assumed"}
-  ],
   "metrics": [
     {"name": "accuracy", "value": "82.3", "unit": "%", "role": "proposed",
      "note": "series SGC (proposed), K=5 point"}
   ]
 }
 ```
-- parameters: the conditions actually used (read from cfg), concise snake_case keys matching the config
-  keys. Declare `source` honestly (`paper` / `assumed` / `paper_unspecified` / `substituted`); it is
-  cross-checked against the paper, so do not mislabel a chosen value as `paper`.
 - metrics: measured performance values (matching the deliverable). `role` is `proposed` or `reference`
   (measured by you, never transcribed). For a figure, `note` pinpoints the series/x-value. The
   `optuna.objective` in the config must equal one of these `metrics[].name`.
