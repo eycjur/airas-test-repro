@@ -1,0 +1,52 @@
+# optimize_anything: A Universal API for Optimizing any Text Parameter
+
+## Authors
+Lakshya A Agrawal, Donghyun Lee, Shangyin Tan, et al. (14 authors from UC Berkeley and MIT)
+
+## Abstract
+This paper demonstrates that a single LLM-based optimization system can match specialized tools across fundamentally different domains. When optimization problems are formulated as improving a text artifact evaluated by a scoring function, their system (optimize_anything) achieves state-of-the-art results across six diverse tasks including:
+- Agent architecture discovery (ARC-AGI accuracy: 32.5% → 89.5%)
+- Cloud scheduling algorithms (40% cost reduction)
+- CUDA kernel generation (87% match or beat PyTorch)
+- Circle packing (outperforms AlphaEvolve's solution for n=26)
+
+## Section 4.2: Circle Packing (Single-Task Search)
+
+### Setup
+The task is to pack n=26 circles while maximizing the sum of radii within a unit square. optimize_anything optimizes the packing algorithm code; the evaluator executes the proposed packing code and returns the score plus geometric diagnostics.
+
+### Side Information (SI) Design
+Circle positions, radii, constraint violations, overlap distances, boundary violations, and a rendered visualization of the packing.
+
+### Results
+optimize_anything reaches a score of 2.63598+, outperforming AlphaEvolve's, OpenEvolve's, and ShinkaEvolve's reported solution (Figure 3). The optimized algorithm is a bilevel optimizer: an LP over radii with dual-variable gradients for L-BFGS-B center optimization, augmented by CMA-ES exploration and diverse seeding strategies.
+
+### Controlled Comparison with OpenEvolve
+In a controlled comparison using GPT-5.1 as proposer:
+- optimize_anything: 2.63598 score in 63 evaluations ($3.18)
+- OpenEvolve@100: 2.4583 score in 100 evaluations ($1.98)
+- OpenEvolve@200: 2.6307 score in 200 evaluations ($6.85)
+
+## Table 3: Side Information Ablation
+
+Circle Packing results:
+- With SI: 100% of best score (2.63598)
+- Score only: 93.96% of best score
+
+## Key Findings
+
+1. **Actionable side information** yields 4-6× faster convergence and substantially higher final performance versus score-only feedback
+2. The optimized artifact is a 900+ line bilevel algorithm, demonstrating the system discovers qualitatively novel strategies
+3. Multi-task search can degrade performance when tasks lack shared transferable structure (e.g., circle packing for different N values)
+
+## Seed Algorithm
+The system starts from a simple greedy packing seed with concentric rings (center circle + ring of 8 + outer ring of 17) and evolves it into a sophisticated bilevel optimizer.
+
+## Constraints
+1. All circles fully inside [0,1]×[0,1]: 0 ≤ x-r, x+r ≤ 1 and 0 ≤ y-r, y+r ≤ 1
+2. No overlaps: distance between centers ≥ sum of radii
+3. Maximize sum of all radii
+
+## Publication
+Published in Proceedings of the ACM Conference on AI and Agentic Systems (CAIS '26), May 26-29, 2026, San Jose, CA, USA
+arXiv: 2605.19633v1

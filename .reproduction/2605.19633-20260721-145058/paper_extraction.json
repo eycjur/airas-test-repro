@@ -1,0 +1,8 @@
+{
+  "parameters": [
+    {"name": "num_circles", "value": "26"},
+    {"name": "unit_square_size", "value": "1"},
+    {"name": "inner_ring_count", "value": "8"},
+    {"name": "outer_ring_count", "value": "17"}
+  ]
+}

@@ -1,0 +1,30 @@
+run_id: reproduction
+
+# Circle packing task parameters
+num_circles: 26  # source: paper, note: same as paper §4.2
+unit_square_size: 1.0  # source: paper, note: unit square [0,1]×[0,1] as stated in paper §4.2
+
+# Optimization algorithm parameters
+algorithm: "greedy_concentric"  # source: substituted, note: paper uses 900+ line bilevel LP/L-BFGS-B/CMA-ES optimizer; substituted with simple greedy concentric ring pattern for CPU-only compute
+max_iterations: 100  # source: assumed, note: not stated in the paper
+tolerance: 1e-6  # source: assumed, note: not stated in the paper
+
+# Seed configuration
+seed: 42  # source: assumed, note: not stated in the paper
+
+# Ring configuration for concentric circle placement
+inner_ring_count: 8  # source: paper, note: same as paper's seed algorithm (ring of 8 around center)
+outer_ring_count: 17  # source: paper, note: same as paper's seed algorithm (outer ring of 17)
+
+# Constraint tolerance
+constraint_tolerance: 1e-6  # source: assumed, note: not stated in the paper
+
+# Optuna hyperparameter search space (for future tuning)
+optuna:
+  objective: sum_radii  # must equal a metric name written to result.json
+  direction: maximize
+  n_trials: 20
+  search_space:
+    inner_ring_count: {type: int, low: 4, high: 12}
+    outer_ring_count: {type: int, low: 10, high: 20}
+    max_iterations: {type: int, low: 50, high: 200}
