@@ -43,7 +43,22 @@ def _load_config(original_run_dir: Path) -> tuple[dict, str, str, int]:
         raise SystemExit(
             "config/run/reproduction.yaml must declare optuna.search_space and optuna.objective"
         )
+    _validate_search_space(search_space)
     return search_space, objective, direction, n_trials
+
+
+def _validate_search_space(search_space: dict) -> None:
+    for name, spec in search_space.items():
+        typ = spec.get("type", "float")
+        if typ == "categorical":
+            if "choices" not in spec:
+                raise SystemExit(
+                    f"optuna.search_space.{name}: type=categorical requires 'choices'"
+                )
+        elif "low" not in spec or "high" not in spec:
+            raise SystemExit(
+                f"optuna.search_space.{name}: type={typ} requires 'low' and 'high'"
+            )
 
 
 def _suggest(trial: optuna.Trial, name: str, spec: dict) -> Any:
@@ -64,21 +79,31 @@ def _run_experiment(
     cmd = [python, "-u", "-m", "src.main", "run=reproduction"]
     cmd += [f"run.{name}={value}" for name, value in overrides.items()]
     cmd += [f"results_dir={out_dir.resolve()}"]
-    subprocess.run(cmd, cwd=original_run_dir, check=False)
+    result = subprocess.run(cmd, cwd=original_run_dir, check=False)
+    if result.returncode != 0:
+        print(f"::warning::src.main exited with code {result.returncode} (cwd={out_dir})")
     return out_dir / "result.json"
 
 
 def _read_metric(result_path: Path, metric: str) -> float | None:
     try:
         data = json.loads(result_path.read_text())
-    except Exception:
+    except FileNotFoundError:
+        print(f"::warning::{result_path} was not created (src.main likely crashed)")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"::warning::{result_path} is not valid JSON: {e}")
         return None
     for m in data.get("metrics", []):
         if isinstance(m, dict) and m.get("name") == metric:
             try:
                 return float(str(m.get("value")).strip())
             except (ValueError, TypeError):
+                print(
+                    f"::warning::metric '{metric}' in {result_path} is not numeric: {m.get('value')!r}"
+                )
                 return None
+    print(f"::warning::metric '{metric}' not found in {result_path}")
     return None
 
 
